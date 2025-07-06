@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ata de Apresentação de TCC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <!-- babel pra javascript... -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- pdf... -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useRef, useEffect } = React;
+        const { jsPDF } = window.jspdf;
+
+        // Este componente cria uma área onde o usuário pode desenhar ou fazer upload de uma assinatura.
+        const SignaturePad = ({ onSave, error }) => {
+            const canvasRef = useRef(null);
+            const [isDrawing, setIsDrawing] = useState(false);
+
+            const getPosition = (e) => {
+                const canvas = canvasRef.current;
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                if (e.touches && e.touches[0]) {
+                    return { x: (e.touches[0].clientX - rect.left) * scaleX, y: (e.touches[0].clientY - rect.top) * scaleY };
+                }
+                return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+            };
+
+            const startDrawing = (e) => {
+                const { x, y } = getPosition(e);
+                const ctx = canvasRef.current.getContext('2d');
+                ctx.beginPath();
+                ctx.moveTo(x, y);
+                setIsDrawing(true);
+            };
+
+            const draw = (e) => {
+                if (!isDrawing) return;
+                e.preventDefault();
+                const { x, y } = getPosition(e);
+                const ctx = canvasRef.current.getContext('2d');
+                ctx.lineTo(x, y);
+                ctx.stroke();
+            };
+
+            const endDrawing = () => {
+                if (!isDrawing) return;
+                setIsDrawing(false);
+                const dataUrl = canvasRef.current.toDataURL('image/png');
+                onSave(dataUrl);
+            };
+
+            const clearPad = () => {
+                const canvas = canvasRef.current;
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                onSave(null);
+            };
+
+            useEffect(() => {
+                const canvas = canvasRef.current;
+                const { width, height } = canvas.getBoundingClientRect();
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.lineWidth = 2;
+                ctx.lineCap = 'round';
+            }, []);
+
+            return (
+                <div className="w-full">
+                    <canvas ref={canvasRef}
+                        className={`border rounded-lg w-full h-40 cursor-crosshair bg-gray-50 ${error ? 'border-red-500' : 'border-gray-400'}`}
+                        onMouseDown={startDrawing} onMouseMove={draw} onMouseUp={endDrawing} onMouseOut={endDrawing}
+                        onTouchStart={startDrawing} onTouchMove={draw} onTouchEnd={endDrawing}
+                    ></canvas>
+                    {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
+                    <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
+                        <button type="button" onClick={clearPad} className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700">Limpar</button>
+                    </div>
+                </div>
+            );
+        };
+        
+        function App() {
+            // 'useState' para gerenciar todos os dados do formulário da ata.
+            const [formData, setFormData] = useState({
+                tituloTCC: '',
+                aluno: '',
+                orientador: '',
+                avaliador1: '',
+                avaliador2: '',
+                curso: 'Ciência da Computação',
+                notaFinal: '',
+                resultado: 'Aprovado(a)',
+                data: '',
+                hora: '',
+                sala: '',
+                prazoCorrecoes: '' // Alterado de data final pra entrega pra um prazo em dias conforme doc
+            });
+
+            // Estado para as quatro assinaturas.
+            const [signatures, setSignatures] = useState({
+                orientador: null,
+                avaliador1: null,
+                avaliador2: null,
+                aluno: null,
+            });
+            
+            // Estado para os erros de validação.
+            const [errors, setErrors] = useState({});
+
+            // preenchendo formulario com oq tiver na url
+            useEffect(() => {
+                const params = new URLSearchParams(window.location.search);
+                const data = {};
+                for (const [key, value] of params.entries()) {
+                    data[key] = decodeURIComponent(value);
+                }
+                if (Object.keys(data).length > 0) {
+                    setFormData(prev => ({ ...prev, ...data }));
+                }
+            }, []);
+
+            // Função para lidar com a mudança de valores nos campos de input.
+            const handleInputChange = (e) => {
+                const { name, value, max } = e.target;
+                
+                // Validação para a nota final não passar de 10, teria que colocar um limite de casas futuramente também...
+                if (name === 'notaFinal' && parseFloat(value) > 10) {
+                    setFormData(prev => ({ ...prev, [name]: '10' }));
+                    return;
+                }
+                
+                // formatação da data
+                if (name === 'data') {
+                    let formattedDate = value.replace(/\D/g, ''); // Remove tudo que não for dígito.
+                    if (formattedDate.length > 2) formattedDate = `${formattedDate.slice(0, 2)}/${formattedDate.slice(2)}`;
+                    if (formattedDate.length > 5) formattedDate = `${formattedDate.slice(0, 5)}/${formattedDate.slice(5, 9)}`;
+                    setFormData(prev => ({ ...prev, [name]: formattedDate }));
+                    return;
+                }
+
+                // formatação da hora
+                if (name === 'hora') {
+                    let formattedTime = value.replace(/\D/g, ''); // Remove tudo que não for dígito.
+                    if (formattedTime.length > 2) formattedTime = `${formattedTime.slice(0, 2)}:${formattedTime.slice(2, 4)}`;
+                    setFormData(prev => ({ ...prev, [name]: formattedTime }));
+                    return;
+                }
+                
+                setFormData(prev => ({ ...prev, [name]: value }));
+            };
+
+            // Função para salvar as assinaturas no estado.
+            const handleSignatureSave = (name, dataUrl) => {
+                setSignatures(prev => ({ ...prev, [name]: dataUrl }));
+            };
+            
+            // validações
+            const validateForm = () => {
+                const newErrors = {};
+                
+                // Aqui verificação para campos obrigatórios e de texto (que aceitam apenas letras).
+                if (!formData.tituloTCC) newErrors.tituloTCC = 'O título do TCC é obrigatório.';
+                if (!formData.aluno) newErrors.aluno = 'O nome do aluno é obrigatório.';
+                else if (!/^[a-zA-Z\sÀ-ú]+$/.test(formData.aluno)) newErrors.aluno = 'O nome do aluno deve conter apenas letras.';
+                
+                if (!formData.orientador) newErrors.orientador = 'O nome do orientador é obrigatório.';
+                else if (!/^[a-zA-Z\sÀ-ú]+$/.test(formData.orientador)) newErrors.orientador = 'O nome do orientador deve conter apenas letras.';
+                
+                if (!formData.avaliador1) newErrors.avaliador1 = 'O nome do avaliador 1 é obrigatório.';
+                else if (!/^[a-zA-Z\sÀ-ú]+$/.test(formData.avaliador1)) newErrors.avaliador1 = 'O nome do avaliador 1 deve conter apenas letras.';
+
+                if (!formData.avaliador2) newErrors.avaliador2 = 'O nome do avaliador 2 é obrigatório.';
+                else if (!/^[a-zA-Z\sÀ-ú]+$/.test(formData.avaliador2)) newErrors.avaliador2 = 'O nome do avaliador 2 deve conter apenas letras.';
+
+                if (formData.notaFinal === '') newErrors.notaFinal = 'A nota final é obrigatória.';
+                else if (isNaN(parseFloat(formData.notaFinal))) newErrors.notaFinal = 'A nota deve ser um número.';
+                else if (parseFloat(formData.notaFinal) > 10) newErrors.notaFinal = 'A nota não pode ser maior que 10.';
+                
+                if (!formData.data) newErrors.data = 'A data é obrigatória.';
+                else if (!/^\d{2}\/\d{2}\/\d{4}$/.test(formData.data)) newErrors.data = 'Formato de data inválido. Use DD/MM/AAAA.';
+                
+                if (!formData.hora) newErrors.hora = 'A hora é obrigatória.';
+                else if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(formData.hora)) newErrors.hora = 'Formato de hora inválido. Use HH:MM.';
+
+                if (!formData.sala) newErrors.sala = 'A sala é obrigatória.';
+                
+                if (!formData.prazoCorrecoes) newErrors.prazoCorrecoes = 'O prazo para correções é obrigatório.';
+                else if (!/^\d+$/.test(formData.prazoCorrecoes)) newErrors.prazoCorrecoes = 'O prazo deve ser um número.';
+
+                // Aqui verificação para todas as assinaturas.
+                if (!signatures.orientador) newErrors.sigOrientador = 'Assinatura do orientador é obrigatória.';
+                if (!signatures.avaliador1) newErrors.sigAvaliador1 = 'Assinatura do avaliador 1 é obrigatória.';
+                if (!signatures.avaliador2) newErrors.sigAvaliador2 = 'Assinatura do avaliador 2 é obrigatória.';
+                if (!signatures.aluno) newErrors.sigAluno = 'Assinatura do estudante é obrigatória.';
+
+                setErrors(newErrors);
+                return Object.keys(newErrors).length === 0;
+            };
+
+            // Função para limpar tudo
+            const clearForm = () => {
+                setFormData({
+                    tituloTCC: '', aluno: '', orientador: '', avaliador1: '', avaliador2: '',
+                    curso: 'Ciência da Computação', notaFinal: '', resultado: 'Aprovado(a)',
+                    data: '', hora: '', sala: '', prazoCorrecoes: ''
+                });
+                setSignatures({ orientador: null, avaliador1: null, avaliador2: null, aluno: null });
+                setErrors({});
+                // Força a limpeza dos canvas
+                document.querySelectorAll('canvas').forEach(canvas => {
+                    const ctx = canvas.getContext('2d');
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                });
+            };
+            
+            // link compartilhavel
+            const generateLink = () => {
+                const params = new URLSearchParams();
+                for (const key in formData) {
+                    if (formData[key]) params.append(key, encodeURIComponent(formData[key]));
+                }
+                const link = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+                navigator.clipboard.writeText(link).then(() => alert('Link copiado para a área de transferência!'));
+            };
+
+            // Função para gerar o PDF.
+            const generatePdf = () => {
+                if (!validateForm()) {
+                    alert('Por favor, corrija os erros indicados antes de gerar o PDF.');
+                    return;
+                }
+
+                const doc = new jsPDF();
+                const margin = 20;
+                const pageWidth = doc.internal.pageSize.getWidth();
+                const textWidth = pageWidth - margin * 2;
+                let y = 20;
+
+                // --- Cabeçalho ---
+                doc.setFontSize(12);
+                doc.setFont('helvetica', 'bold');
+                doc.text('Ministério da Educação', pageWidth / 2, y, { align: 'center' }); y += 7;
+                doc.text('Universidade Federal de Santa Maria', pageWidth / 2, y, { align: 'center' }); y += 7;
+                doc.text('Centro de Tecnologia', pageWidth / 2, y, { align: 'center' }); y += 15;
+
+                doc.setFontSize(14);
+                doc.text('ATA DE APRESENTAÇÃO DE TRABALHO DE CONCLUSÃO DE CURSO', pageWidth / 2, y, { align: 'center' });
+                y += 15;
+
+                // --- Corpo do Texto ---
+                doc.setFontSize(12);
+                doc.setFont('helvetica', 'normal');
+
+                // Helper para pegar o nome do mês conforme o numero
+                const getMonthName = (dateString) => {
+                    if (!dateString || !/^\d{2}\/\d{2}\/\d{4}$/.test(dateString)) return '___________';
+                    const monthIndex = parseInt(dateString.split('/')[1], 10) - 1;
+                    const meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+                    return meses[monthIndex];
+                }
+
+                const dia = formData.data.split('/')[0] || '____';
+                const mes = getMonthName(formData.data);
+                const ano = formData.data.split('/')[2] || '20____';
+                
+                // Texto do corpo da ata, agora com o prazo em dias e nao no mes determinado
+                const bodyText = `Aos ${dia} dias do mês de ${mes} de ${ano}, às ${formData.hora}, na sala ${formData.sala}, realizou-se o Exame da Defesa do Trabalho de Conclusão de Curso intitulado: ${formData.tituloTCC}, de autoria de ${formData.aluno}, acadêmico(a) do Curso de Graduação em ${formData.curso} da UFSM.\n\nA Banca Examinadora esteve constituída por ${formData.orientador}, professor(a) orientador(a) do Trabalho de Conclusão de Curso, e por ${formData.avaliador1} e ${formData.avaliador2}, membros avaliadores. O(a) acadêmico(a) recebeu a nota final ${formData.notaFinal}, sendo considerado(a) ${formData.resultado} pela Banca Examinadora. Foi concedido o prazo de ${formData.prazoCorrecoes} dias para o(a) acadêmico(a) realizar as alterações sugeridas pela Banca Examinadora e entregar o trabalho em sua redação definitiva. E para constar foi lavrada a presente Ata, que será assinada pelos membros da Banca Examinadora e pelo(a) acadêmico(a).\n\nObs. O instrumento de avaliação da Banca Examinadora deverá ser anexado a esta Ata.`;
+                
+                const splitBody = doc.splitTextToSize(bodyText, textWidth);
+                doc.text(splitBody, margin, y);
+                y += (splitBody.length * 5) + 20;
+
+                // santa maria, RS... data atual
+                const today = new Date();
+                const dateText = `Santa Maria, RS, ${today.getDate()} de ${getMonthName(today.toLocaleDateString('pt-BR'))} de ${today.getFullYear()}.`;
+                // alinhando a direita
+                doc.text(dateText, pageWidth - margin, y, { align: 'right' });
+                y += 20;
+
+                // --- Assinaturas ---
+                const sigWidth = 70;
+                const sigHeight = 25;
+                const sigX1 = margin;
+                const sigX2 = pageWidth - margin - sigWidth;
+
+                const addSignature = (sigKey, label, x, yPos) => {
+                    if (signatures[sigKey]) {
+                        doc.addImage(signatures[sigKey], 'PNG', x, yPos, sigWidth, sigHeight);
+                    }
+                    doc.setLineWidth(0.5);
+                    doc.line(x, yPos + sigHeight + 2, x + sigWidth, yPos + sigHeight + 2);
+                    doc.setFontSize(10);
+                    const splitLabel = doc.splitTextToSize(label, sigWidth);
+                    doc.text(splitLabel, x + sigWidth / 2, yPos + sigHeight + 7, { align: 'center' });
+                };
+
+                let sigY = y;
+                if (y + 80 > doc.internal.pageSize.getHeight()) {
+                    doc.addPage();
+                    sigY = margin;
+                }
+
+                addSignature('orientador', `${formData.orientador}\n(Professor/a Orientador/a)`, sigX1, sigY);
+                addSignature('avaliador1', `${formData.avaliador1}\n(Avaliador/a)`, sigX2, sigY);
+                
+                const sigY2 = sigY + sigHeight + 20;
+                addSignature('avaliador2', `${formData.avaliador2}\n(Avaliador/a)`, sigX1, sigY2);
+                addSignature('aluno', `${formData.aluno}\n(Acadêmico/a)`, sigX2, sigY2);
+
+                doc.save(`Ata_TCC_${formData.aluno.replace(/\s/g, '_') || 'aluno'}.pdf`);
+            };
+
+            return (
+                <div className="bg-gray-100 min-h-screen font-sans p-4 sm:p-6 lg:p-8">
+                    <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-lg p-6 sm:p-8">
+                        <header className="mb-8 text-center">
+                            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800">ATA DE APRESENTAÇÃO DE TCC</h1>
+                        </header>
+
+                        <form onSubmit={(e) => e.preventDefault()}>
+                            <fieldset className="border-b border-gray-200 pb-6 mb-6">
+                                <legend className="text-xl font-semibold text-gray-700 mb-4">Informações do Trabalho e Banca</legend>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
+                                    <InputField label="Título do Trabalho" name="tituloTCC" value={formData.tituloTCC} onChange={handleInputChange} error={errors.tituloTCC} />
+                                    <InputField label="Nome do Aluno(a)" name="aluno" value={formData.aluno} onChange={handleInputChange} error={errors.aluno} />
+                                    <InputField label="Professor(a) Orientador(a)" name="orientador" value={formData.orientador} onChange={handleInputChange} error={errors.orientador} />
+                                    <InputField label="Professor(a) Avaliador(a) 1" name="avaliador1" value={formData.avaliador1} onChange={handleInputChange} error={errors.avaliador1} />
+                                    <InputField label="Professor(a) Avaliador(a) 2" name="avaliador2" value={formData.avaliador2} onChange={handleInputChange} error={errors.avaliador2} />
+                                    <div>
+                                        <label htmlFor="curso" className="block text-sm font-medium text-gray-700 mb-1">Curso</label>
+                                        <select id="curso" name="curso" value={formData.curso} onChange={handleInputChange} className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
+                                            <option>Ciência da Computação</option>
+                                            <option>Sistemas de Informação</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 mt-4">
+                                   <InputField type="number" label="Nota Final" name="notaFinal" value={formData.notaFinal} onChange={handleInputChange} error={errors.notaFinal} placeholder="Ex: 8.5" max="10" />
+                                   <div>
+                                        <label htmlFor="resultado" className="block text-sm font-medium text-gray-700 mb-1">Resultado</label>
+                                        <select id="resultado" name="resultado" value={formData.resultado} onChange={handleInputChange} className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
+                                            <option>Aprovado(a)</option>
+                                            <option>Reprovado(a)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </fieldset>
+
+                            <fieldset className="border-b border-gray-200 pb-6 mb-6">
+                                <legend className="text-xl font-semibold text-gray-700 mb-4">Informações da Sessão</legend>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-x-6">
+                                    <InputField label="Data da Apresentação" name="data" value={formData.data} onChange={handleInputChange} placeholder="DD/MM/AAAA" error={errors.data} maxLength="10" />
+                                    <InputField label="Hora da Apresentação" name="hora" value={formData.hora} onChange={handleInputChange} placeholder="HH:MM" error={errors.hora} maxLength="5" />
+                                    <InputField label="Sala" name="sala" value={formData.sala} onChange={handleInputChange} error={errors.sala} />
+                                </div>
+                            </fieldset>
+
+                            <fieldset className="border-b border-gray-200 pb-6 mb-6">
+                                <legend className="text-xl font-semibold text-gray-700 mb-4">Observação</legend>
+                                 <InputField type="number" label="Prazo para correções (em dias)" name="prazoCorrecoes" value={formData.prazoCorrecoes} onChange={handleInputChange} placeholder="Ex: 15" error={errors.prazoCorrecoes} />
+                            </fieldset>
+
+                            <fieldset>
+                                <legend className="text-xl font-semibold text-gray-700 mb-4 text-center">Assinaturas</legend>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                    <div className="text-center">
+                                        <h3 className="font-medium text-gray-700 mb-2">Orientador(a)</h3>
+                                        <SignaturePad onSave={(data) => handleSignatureSave('orientador', data)} error={errors.sigOrientador} />
+                                    </div>
+                                    <div className="text-center">
+                                        <h3 className="font-medium text-gray-700 mb-2">Avaliador(a) 1</h3>
+                                        <SignaturePad onSave={(data) => handleSignatureSave('avaliador1', data)} error={errors.sigAvaliador1} />
+                                    </div>
+                                    <div className="text-center">
+                                        <h3 className="font-medium text-gray-700 mb-2">Avaliador(a) 2</h3>
+                                        <SignaturePad onSave={(data) => handleSignatureSave('avaliador2', data)} error={errors.sigAvaliador2} />
+                                    </div>
+                                    <div className="text-center">
+                                        <h3 className="font-medium text-gray-700 mb-2">Estudante</h3>
+                                        <SignaturePad onSave={(data) => handleSignatureSave('aluno', data)} error={errors.sigAluno} />
+                                    </div>
+                                </div>
+                            </fieldset>
+
+                            <div className="mt-10 flex flex-col sm:flex-row justify-center items-center gap-4">
+                                <button type="button" onClick={clearForm} className="w-full sm:w-auto px-6 py-3 font-medium text-white bg-red-600 rounded-lg shadow-sm hover:bg-red-700">Limpar Formulário</button>
+                                <button type="button" onClick={generateLink} className="w-full sm:w-auto px-6 py-3 font-medium text-white bg-blue-600 rounded-lg shadow-sm hover:bg-blue-700">Gerar Link</button>
+                                <button type="button" onClick={generatePdf} className="w-full sm:w-auto px-6 py-3 font-medium text-white bg-green-600 rounded-lg shadow-sm hover:bg-green-700">Gerar PDF</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+        
+        // Componente reutilizável para os campos de texto.
+        const InputField = ({ type = 'text', label, name, value, onChange, placeholder, error, maxLength }) => (
+            <div className="mb-4">
+                <label htmlFor={name} className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+                <input type={type} id={name} name={name} value={value} onChange={onChange} placeholder={placeholder} maxLength={maxLength}
+                    className={`block w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 ${error ? 'border-red-500' : 'border-gray-300'}`}
+                />
+                {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
+            </div>
+        );
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
